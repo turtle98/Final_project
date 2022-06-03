@@ -4,12 +4,13 @@ from typing import Optional, List
 import torch
 import torch.nn.functional as F
 from torch import nn, Tensor
-
+from torch import cuda
 from transformers import BertTokenizer
 from transformers import BertModel
 
-model = BertModel.from_pretrained('bert-base-uncased')
-tokenizer = BertTokenizer.from_pretrained('bert-base-uncased', do_lower_case=True)
+device = 'cuda' if cuda.is_available() else 'cpu'
+
+model = BertModel.from_pretrained('bert-base-uncased').to(device)  
 
 class Transformer(nn.Module):
 
@@ -21,7 +22,7 @@ class Transformer(nn.Module):
       
       self.encoder = model
       for param in self.encoder.parameters():
-         param.requires_grad = False
+        param.requires_grad = False  
       #freeze bert parameters, we only want to update the decoder
 
 
@@ -45,9 +46,11 @@ class Transformer(nn.Module):
   def forward(self, src, mask, query_embed, pos_embed):
       #N = batch_Size, S = sequence length
       N,S = src.shape
+      src =src.cuda()
+      mask = mask.cuda()
       #query_embed shape = (num_query, hidden_dim) = (32, 768)
-      query_embed = query_embed.unsqueeze(1).permute(1,0,2).repeat(N,1,1)
-      tgt = torch.zeros_like(query_embed)
+      query_embed = query_embed.unsqueeze(1).permute(1,0,2).repeat(N,1,1).cuda()
+      tgt = torch.zeros_like(query_embed).cuda()
       memory = self.encoder(src, mask)
       out = self.decoder(tgt, memory[0], memory_key_padding_mask = mask,pos = pos_embed, 
                          query_pos = query_embed)
@@ -182,15 +185,15 @@ def _get_clones(module, N):
     return nn.ModuleList([copy.deepcopy(module) for i in range(N)])
 
 
-def build_transformer(args):
+def build_transformer(bs):
     return Transformer(
-        d_model=args.hidden_dim,
-        dropout=args.dropout,
-        nhead=args.nheads,
-        dim_feedforward=args.dim_feedforward,
-        num_decoder_layers=args.dec_layers,
-        normalize_before=args.pre_norm,
-        return_intermediate_dec=True
+        d_model=768,
+        dropout=0.1,
+        nhead=8,
+        dim_feedforward= 2048,
+        num_decoder_layers= 6,
+        normalize_before= False,
+        return_intermediate_dec=False
     )
 
 

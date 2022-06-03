@@ -7,6 +7,8 @@ from our_matcher import build_matcher
 #from .segmentation import (DETRsegm, PostProcessPanoptic, PostProcessSegm,
 #                           dice_loss, sigmoid_focal_loss)
 from our_transformer import build_transformer
+from torch import cuda
+device = 'cuda' if cuda.is_available() else 'cpu'
 
 class MLP(nn.Module):
     """ Very simple multi-layer perceptron (also called FFN)"""
@@ -96,9 +98,12 @@ class SetCriterion(nn.Module):
         self.eos_coef1 = eos_coef1
         self.eos_coef2 = eos_coef2
         self.losses = losses
-        empty_weight = torch.ones(self.num_targets + 1)
-        empty_weight[-1] = self.eos_coef1
-        self.register_buffer('empty_weight', empty_weight)
+        empty_weight1 = torch.ones(self.num_targets+1)
+        empty_weight2= torch.ones(self.num_aspects+1)
+        empty_weight1[-1] = self.eos_coef2
+        empty_weight2[-1] = self.eos_coef1
+        self.register_buffer('empty_weight1', empty_weight1)
+        self.register_buffer('empty_weight2', empty_weight2)
 
     def loss_targets(self, outputs, targets, indices, log=True):
         """Classification loss (NLL)
@@ -108,11 +113,10 @@ class SetCriterion(nn.Module):
         src_logits = outputs['pred_target']
 
         idx = self._get_src_permutation_idx(indices)
-        target_classes_o = torch.cat([t["target"][J] for t, (_, J) in zip(targets, indices)])
+        target_classes_o = torch.cat([t["target"][J] for t, (_, J) in zip(targets, indices)]).cuda()
         target_classes = torch.full(src_logits.shape[:2], self.num_targets,
-                                    dtype=torch.int64, device=src_logits.device)
+                                    dtype=torch.int64, device=src_logits.device).cuda()
         target_classes[idx] = target_classes_o
-
         loss_target = F.cross_entropy(src_logits.transpose(1, 2), target_classes)
         losses = {'loss_target': loss_target}
 
@@ -133,7 +137,6 @@ class SetCriterion(nn.Module):
         target_aspect = torch.full(src_logits.shape[:2], self.num_aspects,
                                     dtype=torch.int64, device=src_logits.device)
         target_aspect[idx] = target_aspect_o
-
         loss_aspect = F.cross_entropy(src_logits.transpose(1, 2), target_aspect)
         losses = {'loss_aspect': loss_aspect}
 
@@ -149,7 +152,7 @@ class SetCriterion(nn.Module):
         src_sentiment = outputs['pred_sentiment'][idx]
         target_sentiment = torch.cat([t['sentiment'][i] for t, (_, i) in zip(targets, indices)], dim=0)
         loss_sentiment = F.mse_loss(src_sentiment, target_sentiment, reduction='mean')
-        loss_sentiment = 10*loss_sentiment
+        loss_sentiment = loss_sentiment
         losses = {'loss_sentiment': loss_sentiment}
 
         return losses
@@ -183,10 +186,8 @@ class SetCriterion(nn.Module):
                       The expected keys in each dict depends on the losses applied, see each loss' doc
         """
         outputs_without_aux = {k: v for k, v in outputs.items() if k != 'aux_outputs'}
-
         # Retrieve the matching between the outputs of the last layer and the targets
         indices = self.matcher(outputs_without_aux, targets)
-        
         # Compute all the requested losses
         losses = {}
         for loss in self.losses:
@@ -203,7 +204,7 @@ class SetCriterion(nn.Module):
 
         return losses
 
-def build(args):
+def build(bs):
     # the `num_classes` naming here is somewhat misleading.
     # it indeed corresponds to `max_obj_id + 1`, where max_obj_id
     # is the maximum id for a class in your dataset. For example,
@@ -213,10 +214,10 @@ def build(args):
     # For more details on this, check the following discussion
     # https://github.com/facebookresearch/detr/issues/108#issuecomment-650269223
 
-    n = np.zeros(shape=(436, 32, 768))
+    n = np.zeros(shape=(bs, 32, 768))
     x = torch.tensor(n, dtype=torch.float32)
     p_enc_1d_model = PositionalEncoding1D(768)
-    p_enc = p_enc_1d_model(x)
+    p_enc = p_enc_1d_model(x).cuda()
 
     transformer = build_transformer(1)
     matcher = build_matcher(1)
@@ -230,8 +231,8 @@ def build(args):
         aux_loss=False,
     )
     
-    weight_dict = {'loss_target': 1, 'loss_aspect': 1, 'loss_sentiment' : 1}
+    weight_dict = {'loss_target': 10, 'loss_aspect': 10, 'loss_sentiment' : 20}
     losses = ['target', 'aspect', 'sentiment']
-    criterion = SetCriterion(4, 226, matcher, weight_dict, 0.1 , 0.1, losses)
+    criterion = SetCriterion(226, 4, matcher, weight_dict, 0.1 , 0.1, losses)
 
-    return criterion
+    return model, criterion
